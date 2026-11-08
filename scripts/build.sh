@@ -23,6 +23,7 @@ chmod +x ./configure 2>/dev/null || true
 #   - 上游还把 libc++.a / libunwind.a 拷进自建 prefix，这里用 -static 达到同样效果
 CC_FLAGS=""
 STATIC_FLAGS="--enable-static --disable-shared"
+PKGCONFIG_FLAGS=""
 case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
         if command -v clang >/dev/null 2>&1; then
@@ -33,6 +34,11 @@ case "$(uname -s)" in
         fi
         # 单文件 exe：把 libc++ / libgcc / winpthread 全静态链进来。
         STATIC_FLAGS="--enable-static --disable-shared --extra-ldflags=-static"
+        # ⚠️ 必须带 --static：MSYS2 的 x264 同时有 .dll.a（动态导入库）和 .a。
+        # 不带这个参数时 pkg-config 给出 -lx264 指向导入库，配上上面的 -static
+        # 链接探测就会失败，configure 报 "ERROR: x264 not found using pkg-config"。
+        # 上游的 msys2/build.sh 用的就是这一行。
+        PKGCONFIG_FLAGS="--pkg-config-flags=--static"
         ;;
     Linux)
         echo "工具链: gcc ($(cc --version | head -1))"
@@ -55,7 +61,6 @@ if pkg_exists x264; then
 else
     echo "libx264: 未找到（转码将只有硬件编码器可用）"
 fi
-
 # 硬件编码器是这次自建的主要动机之一：librempeg 的预编译件只有 libx264 软编，
 # 1080p 转码约 0.5x 实时（一集 106 秒要等 55 秒）。开 NVENC 后同一台机器约 11x。
 NVENC_FLAGS=""
@@ -96,6 +101,7 @@ fi
     --enable-network \
     --disable-ffplay \
     $CC_FLAGS \
+    $PKGCONFIG_FLAGS \
     $X264_FLAGS \
     $NVENC_FLAGS \
     --enable-decoder=bvc2,vvc,h264,hevc,aac,flac,mp3,ac3,eac3,opus,vorbis,pcm_s16le \

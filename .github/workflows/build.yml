@@ -110,15 +110,15 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: msys2/setup-msys2@v2
-        # MSYS2 镜像偶尔 504（本仓库实测撞到两次），失败重试两次。
-        # 这是唯一的网络型失败，与代码无关。
-        continue-on-error: false
         with:
           # CLANG64，与 jellyfin-ffmpeg 官方 Windows 构建一致
           # （.github/workflows/_meta_win_clang_portable.yaml 用的是
           #  mingw-w64-clang-x86_64-toolchain）。用 gcc/UCRT64 会偏离上游验证过的组合。
           msystem: CLANG64
-          update: true
+          # ⚠️ update:false 是刻意的。update:true 会跑完整 pacman -Syu，
+          # 要轮询大量镜像，本仓库实测连续三次撞 504（Unexpected HTTP response: 504）。
+          # 构建用不到「系统最新」，只要下面这几个包能装上即可。
+          update: false
           install: >-
             git make diffutils
             mingw-w64-clang-x86_64-toolchain
