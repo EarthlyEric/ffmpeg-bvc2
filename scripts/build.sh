@@ -124,30 +124,61 @@ fi
 
 # ── 字幕渲染（libass）─────────────────────────────────────────────────────
 # 为什么加它：系统版 jellyfin-ffmpeg 有 subtitles/ass 滤镜，自建版原先没有，
-# 这让「用 bin/ 下的自建版替换系统版」出现能力缺口。本仓库目前没有代码调用
-# 字幕滤镜，但缺口意味着以后谁想烧字幕会莫名其妙失败，不如补齐。
+# 这让「用 bin/ 下的自建版替换系统版」出现能力缺口。
 #
 # libass 的依赖链：libass → freetype2 + fribidi + fontconfig + harfbuzz。
-# 四个都必须能通过 pkg-config 找到，否则 configure 的 --enable-libass 会直接失败。
 #
-# ⚠️ 静态链接后字体仍是**运行时**依赖：烧字幕要读系统字体（Windows 走 GDI/字体目录，
-# Linux 走 fontconfig）。所以这个能力在 Windows 上能工作，但需要目标机器装了字体 ——
-# 这对播放场景是自然成立的。
+# ⚠️ 只查 pkg-config 存在是不够的 —— 这是踩过的坑：MSYS2 的 fontconfig
+# 有 .pc 却**没有静态库**，configure 报
+#   ERROR: fontconfig not found using pkg-config
+# 而我们的预检还打印着 "fontconfig: 2.18.3"，白白多跑一轮 CI。
+# 根因是 FFmpeg 的 require_pkg_config 会真编真链，静态场景下必须有 .a。
+# （对照：jellyfin 自己用 --default-library=static 重编了 fontconfig。）
+#
+# 所以这里做**真实静态链接探测**：能编过才算依赖齐全。
+can_static_link() {
+    _name="$1"; _header="$2"; _symbol="$3"
+    pkg_exists "$_name" || return 1
+    _cflags=$(pkg-config --cflags "$_name" 2>/dev/null || true)
+    _libs=$(pkg-config --libs --static "$_name" 2>/dev/null || true)
+    [ -n "$_libs" ] || return 1
+    _tmp=$(mktemp -d 2>/dev/null || echo "/tmp/bvc2probe.$$")
+    mkdir -p "$_tmp" 2>/dev/null || true
+    cat > "$_tmp/probe.c" <<PROBE
+#include <$_header>
+int main(void) { (void)&$_symbol; return 0; }
+PROBE
+    if ${CC:-cc} $_cflags "$_tmp/probe.c" $_libs -o "$_tmp/probe" >/dev/null 2>&1; then
+        rm -rf "$_tmp"
+        return 0
+    fi
+    rm -rf "$_tmp"
+    return 1
+}
+
 SUB_FLAGS=""
 SUB_FILTERS=""
 missing_sub=""
-for dep in freetype2 fribidi fontconfig harfbuzz libass; do
-    if ! pkg_exists "$dep"; then
+# 顺序按依赖链，fontconfig 最可能缺静态库，放在前面便于日志判读。
+for spec in "freetype2:freetype2/ft2build.h:FT_Init_FreeType" \
+            "fribidi:fribidi/fribidi.h:fribidi_version_info" \
+            "fontconfig:fontconfig/fontconfig.h:FcInit" \
+            "harfbuzz:hb.h:hb_version" \
+            "libass:ass/ass.h:ass_library_init"
+do
+    dep=${spec%%:*}; rest=${spec#*:}; header=${rest%%:*}; symbol=${rest#*:}
+    if ! can_static_link "$dep" "$header" "$symbol"; then
         missing_sub="$missing_sub $dep"
     fi
 done
 if [ -z "$missing_sub" ]; then
     SUB_FLAGS="--enable-libfreetype --enable-libfribidi --enable-libfontconfig --enable-libharfbuzz --enable-libass"
     SUB_FILTERS=",subtitles,ass"
-    echo "libass: $(pkg-config --modversion libass)（含 freetype2/fribidi/fontconfig/harfbuzz）"
+    echo "libass: $(pkg-config --modversion libass)，静态链接探测通过（含 freetype2/fribidi/fontconfig/harfbuzz）"
 else
     # 不致命：没有字幕渲染不影响播放与转码，如实报出来即可。
-    echo "libass: 跳过（缺 pkg-config 项:$missing_sub）—— 产物将没有 subtitles/ass 滤镜"
+    echo "libass: 跳过 —— 这些依赖通过不了**静态链接**探测:$missing_sub"
+    echo "libass: 产物将没有 subtitles/ass 滤镜（字幕不影响播放与转码）"
 fi
 
 ./configure \

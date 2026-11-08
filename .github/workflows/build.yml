@@ -193,14 +193,30 @@ jobs:
           git -C "$work/nv-codec-headers" checkout "$NV_CODEC_HEADERS_COMMIT"
           make -C "$work/nv-codec-headers" install PREFIX=/clang64
 
-          # 先确认 libass 依赖链在 CLANG64 下都能被 pkg-config 看到。
-          # 静态链接需要 .a，MSYS2 有些包的 .pc 只描述动态库，缺了要能一眼看出来。
-          echo "=== libass 依赖可用性 ==="
+          # 确认 libass 依赖链在 CLANG64 下的**静态**可用性。
+          # 只打印 pkg-config 版本是误导：MSYS2 的 fontconfig 有 .pc 但没有 .a，
+          # 曾经因此多跑一轮 CI 才发现（configure 报 fontconfig not found）。
+          # 这里直接看有没有 .a，与 build.sh 的真实链接探测互补。
+          echo "=== libass 依赖静态库检查 ==="
           for dep in freetype2 fribidi fontconfig harfbuzz libass; do
             if pkg-config --exists "$dep"; then
-              echo "  $dep: $(pkg-config --modversion "$dep")"
+              libs=$(pkg-config --libs --static "$dep" 2>/dev/null || true)
+              # 把 -lxxx 逐个解析成 libxxx.a 检查是否存在
+              missing=""
+              for l in $(echo "$libs" | tr ' ' '\n' | sed -n 's/^-l//p'); do
+                found=""
+                for d in /clang64/lib /clang64/lib64 /usr/lib; do
+                  [ -f "$d/lib$l.a" ] && { found=1; break; }
+                done
+                [ -z "$found" ] && missing="$missing $l"
+              done
+              if [ -z "$missing" ]; then
+                echo "  $dep: $(pkg-config --modversion "$dep") (静态库齐全)"
+              else
+                echo "  $dep: 缺静态库:$missing"
+              fi
             else
-              echo "  $dep: 缺失"
+              echo "  $dep: pkg-config 缺失"
             fi
           done
 
