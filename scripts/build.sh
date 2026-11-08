@@ -16,6 +16,25 @@ cd "$SRC"
 # 往返后 mode 位会丢失（Linux CI 实测 exit 126: Permission denied），所以显式补上。
 chmod +x ./configure 2>/dev/null || true
 
+# ── Windows 大小写陷阱：libc++ 的 <version> 撞上 FFmpeg 的 VERSION ──────────
+# Windows 文件系统大小写不敏感，于是 libc++ 的 `#include <version>` 会命中仓库根目录
+# 的 `VERSION` 文件（它是一行纯文本版本号），编译报：
+#   ./version:1:1: error: expected unqualified-id
+# 实测 CLANG64 构建必炸在这里。上游 msys2/build.sh 用改名 + 改 version.sh 规避，
+# 这里照做。只在 MINGW/MSYS 下执行，Linux 不受影响。
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        if [ -f VERSION ] && [ -f ffbuild/version.sh ]; then
+            if [ ! -f VERSION.bak ]; then
+                mv VERSION VERSION.bak
+            fi
+            # version.sh 里用 `cat VERSION` 读版本号，改名后要跟着指过去。
+            sed -i 's/cat VERSION/cat VERSION.bak/g' ffbuild/version.sh
+            echo "Windows 大小写规避: VERSION -> VERSION.bak（避免 libc++ <version> 误命中）"
+        fi
+        ;;
+esac
+
 # ── 工具链 ───────────────────────────────────────────────────────────────
 # Windows 走 CLANG64，与 jellyfin-ffmpeg 官方一致（.github/workflows/_meta_win_clang_portable.yaml
 # 用 mingw-w64-clang-x86_64-toolchain）。不是 gcc：
