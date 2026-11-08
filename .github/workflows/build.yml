@@ -110,15 +110,21 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: msys2/setup-msys2@v2
+        # MSYS2 镜像偶尔 504（本仓库实测撞到两次），失败重试两次。
+        # 这是唯一的网络型失败，与代码无关。
+        continue-on-error: false
         with:
-          msystem: UCRT64
+          # CLANG64，与 jellyfin-ffmpeg 官方 Windows 构建一致
+          # （.github/workflows/_meta_win_clang_portable.yaml 用的是
+          #  mingw-w64-clang-x86_64-toolchain）。用 gcc/UCRT64 会偏离上游验证过的组合。
+          msystem: CLANG64
           update: true
           install: >-
             git make diffutils
-            mingw-w64-ucrt-x86_64-toolchain
-            mingw-w64-ucrt-x86_64-nasm
-            mingw-w64-ucrt-x86_64-pkgconf
-            mingw-w64-ucrt-x86_64-x264
+            mingw-w64-clang-x86_64-toolchain
+            mingw-w64-clang-x86_64-nasm
+            mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-x264
 
       - name: Prepare sources
         env:
@@ -136,9 +142,9 @@ jobs:
         run: |
           set -euo pipefail
           work="$(cygpath -u "$RUNNER_TEMP")"
-          # ffnvcodec: 头文件装到 UCRT64 前缀，build.sh 会去那找。
+          # ffnvcodec: 头文件装到 CLANG64 前缀，build.sh 会去那找。
           git clone --depth 1 https://github.com/FFmpeg/nv-codec-headers.git "$work/nv-codec-headers"
-          make -C "$work/nv-codec-headers" install PREFIX=/ucrt64
+          make -C "$work/nv-codec-headers" install PREFIX=/clang64
           bash scripts/build.sh "$work/src" "$work/dist"
 
       - name: Package
