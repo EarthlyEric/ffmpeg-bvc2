@@ -12,6 +12,10 @@ DEST="${2:?用法: build.sh <源目录> <输出目录>}"
 
 cd "$SRC"
 
+# configure 必须可执行。上游 checkout 出来是 755，但经过 upload-artifact/download-artifact
+# 往返后 mode 位会丢失（Linux CI 实测 exit 126: Permission denied），所以显式补上。
+chmod +x ./configure 2>/dev/null || true
+
 # 硬件编码器是这次自建的主要动机之一：librempeg 的预编译件只有 libx264 软编，
 # 1080p 转码约 0.5x 实时（一集 106 秒要等 55 秒）。开 NVENC 后同一台机器约 11x。
 NVENC_FLAGS=""
@@ -21,8 +25,8 @@ FFNVCODEC_HEADER=""
 for candidate in \
     "${FFNVCODEC_PREFIX:-}/include/ffnvcodec/nvEncodeAPI.h" \
     "/usr/include/ffnvcodec/nvEncodeAPI.h" \
-    "${MINGW_PREFIX:-/mingw64}/include/ffnvcodec/nvEncodeAPI.h" \
-    "${MINGW_PREFIX:-/mingw64}/include/ffnvcodec/nvEncodeAPI.h"
+    "/ucrt64/include/ffnvcodec/nvEncodeAPI.h" \
+    "/mingw64/include/ffnvcodec/nvEncodeAPI.h"
 do
     [ -n "$candidate" ] && [ -f "$candidate" ] && { FFNVCODEC_HEADER="$candidate"; break; }
 done

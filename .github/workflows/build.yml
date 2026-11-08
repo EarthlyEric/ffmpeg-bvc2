@@ -114,12 +114,14 @@ jobs:
 
       - uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           update: true
           install: >-
-            git make diffutils mingw-w64-x86_64-toolchain
-            mingw-w64-x86_64-nasm mingw-w64-x86_64-yasm
-            mingw-w64-x86_64-pkgconf mingw-w64-x86_64-x264
+            git make diffutils
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-nasm
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-x264
 
       - name: Prepare sources
         env:
@@ -130,9 +132,9 @@ jobs:
       - name: Build
         run: |
           set -euo pipefail
-          # ffnvcodec: MSYS2 的 nv-codec-headers 装到 mingw 前缀，build.sh 会去那找。
+          # ffnvcodec: 头文件装到 UCRT64 前缀，build.sh 会去那找。
           git clone --depth 1 https://github.com/FFmpeg/nv-codec-headers.git "$RUNNER_TEMP/nv-codec-headers"
-          make -C "$RUNNER_TEMP/nv-codec-headers" install PREFIX=/mingw64
+          make -C "$RUNNER_TEMP/nv-codec-headers" install PREFIX=/ucrt64
           bash scripts/build.sh "$RUNNER_TEMP/src" "$RUNNER_TEMP/dist"
 
       - name: Package
