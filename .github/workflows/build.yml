@@ -52,22 +52,19 @@ jobs:
           UPSTREAM_COMMIT_OVERRIDE: ${{ steps.pin.outputs.commit }}
         run: bash scripts/prepare.sh "$RUNNER_TEMP/src"
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: patched-src
-          path: ${{ runner.temp }}/src
-          retention-days: 1
-
   build-linux:
     name: Linux x86_64
     needs: verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: patched-src
-          path: ${{ runner.temp }}/src
+      - name: Prepare sources
+        # 各构建 job 自己跑 prepare.sh，而不是从 verify 传 artifact：
+        # upload-artifact 会把 zip 解成 644，configure/ffbuild/*.sh 全部丢掉执行位，
+        # 结果是 make 报 Error 126（实测踩到两次）。git clone 能保住 mode 位。
+        env:
+          UPSTREAM_COMMIT_OVERRIDE: ${{ needs.verify.outputs.commit }}
+        run: bash scripts/prepare.sh "$RUNNER_TEMP/src"
 
       - name: Install dependencies
         run: |
@@ -127,6 +124,7 @@ jobs:
         env:
           UPSTREAM_REPO: https://github.com/jellyfin/jellyfin-ffmpeg.git
           UPSTREAM_BRANCH: jellyfin
+          UPSTREAM_COMMIT_OVERRIDE: ${{ needs.verify.outputs.commit }}
         run: bash scripts/prepare.sh "$RUNNER_TEMP/src"
 
       - name: Build
