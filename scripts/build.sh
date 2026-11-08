@@ -122,6 +122,34 @@ if [ -z "$X264_ENCODERS$NVENC_ENCODERS" ]; then
     exit 1
 fi
 
+# ── 字幕渲染（libass）─────────────────────────────────────────────────────
+# 为什么加它：系统版 jellyfin-ffmpeg 有 subtitles/ass 滤镜，自建版原先没有，
+# 这让「用 bin/ 下的自建版替换系统版」出现能力缺口。本仓库目前没有代码调用
+# 字幕滤镜，但缺口意味着以后谁想烧字幕会莫名其妙失败，不如补齐。
+#
+# libass 的依赖链：libass → freetype2 + fribidi + fontconfig + harfbuzz。
+# 四个都必须能通过 pkg-config 找到，否则 configure 的 --enable-libass 会直接失败。
+#
+# ⚠️ 静态链接后字体仍是**运行时**依赖：烧字幕要读系统字体（Windows 走 GDI/字体目录，
+# Linux 走 fontconfig）。所以这个能力在 Windows 上能工作，但需要目标机器装了字体 ——
+# 这对播放场景是自然成立的。
+SUB_FLAGS=""
+SUB_FILTERS=""
+missing_sub=""
+for dep in freetype2 fribidi fontconfig harfbuzz libass; do
+    if ! pkg_exists "$dep"; then
+        missing_sub="$missing_sub $dep"
+    fi
+done
+if [ -z "$missing_sub" ]; then
+    SUB_FLAGS="--enable-libfreetype --enable-libfribidi --enable-libfontconfig --enable-libharfbuzz --enable-libass"
+    SUB_FILTERS=",subtitles,ass"
+    echo "libass: $(pkg-config --modversion libass)（含 freetype2/fribidi/fontconfig/harfbuzz）"
+else
+    # 不致命：没有字幕渲染不影响播放与转码，如实报出来即可。
+    echo "libass: 跳过（缺 pkg-config 项:$missing_sub）—— 产物将没有 subtitles/ass 滤镜"
+fi
+
 ./configure \
     --prefix="$DEST" \
     --extra-version=bvc2 \
@@ -136,6 +164,7 @@ fi
     $PKGCONFIG_FLAGS \
     $X264_FLAGS \
     $NVENC_FLAGS \
+    $SUB_FLAGS \
     --enable-decoder=bvc2,vvc,h264,hevc,aac,flac,mp3,ac3,eac3,opus,vorbis,pcm_s16le \
     --enable-encoder=aac${X264_ENCODERS}${NVENC_ENCODERS} \
     --enable-demuxer=mov,mpegts,hls,matroska,mp3,wav,flac,ogg \
@@ -143,7 +172,7 @@ fi
     --enable-protocol=file,http,https,tcp,tls,crypto,pipe \
     --enable-parser=h264,hevc,vvc,aac \
     --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb,vvc_mp4toannexb,aac_adtstoasc \
-    --enable-filter=scale,format,aresample,atrim,trim,crop,transpose,null \
+    --enable-filter=scale,format,aresample,atrim,trim,crop,transpose,null${SUB_FILTERS} \
     --enable-swscale \
     --enable-swresample \
     --enable-avfilter
@@ -170,3 +199,17 @@ echo "=== 产物能力检查 ==="
     echo "错误: 产物没有任何可用的视频编码器" >&2
     exit 1
 }
+
+# 字幕：依赖齐备时必须真的有滤镜；缺依赖时允许没有，但要如实标注，
+# 避免「以为编进去了其实没有」。
+if [ -n "$SUB_FLAGS" ]; then
+    for f in subtitles ass; do
+        if ! "$DEST/bin/ffmpeg" -hide_banner -filters 2>/dev/null | grep -qE "\b$f\b"; then
+            echo "错误: 依赖齐全但产物缺少 $f 滤镜" >&2
+            exit 1
+        fi
+    done
+    echo "字幕滤镜: subtitles / ass 已就位"
+else
+    echo "字幕滤镜: 本产物不含（构建时缺依赖，见上文 libass 行）"
+fi

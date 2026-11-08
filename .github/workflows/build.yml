@@ -76,8 +76,11 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
+          # libass-dev 会自动拉入运行时依赖，但静态链接需要显式装 -dev 提供
+          # 的 .a 和 pkg-config 文件，所以四个前置库都写出来。
           sudo apt-get install -y --no-install-recommends \
-            build-essential yasm nasm pkg-config libx264-dev
+            build-essential yasm nasm pkg-config libx264-dev \
+            libass-dev libfreetype-dev libfribidi-dev libfontconfig1-dev libharfbuzz-dev
 
       - name: Install ffnvcodec headers
         # 只有头文件（没有运行时依赖），让 configure 能开 nvenc。
@@ -148,7 +151,8 @@ jobs:
             mingw-w64-clang-x86_64-lld \
             mingw-w64-clang-x86_64-nasm \
             mingw-w64-clang-x86_64-pkgconf \
-            mingw-w64-clang-x86_64-x264"
+            mingw-w64-clang-x86_64-x264 \
+            mingw-w64-clang-x86_64-libass"
           # --disable-download-timeout 是关键：镜像偶尔慢到
           # "Less than 1 bytes/sec transferred the last 10 seconds" 就整个事务失败。
           # 加上它 + 三次重试，把镜像抖动变成可恢复。
@@ -188,6 +192,18 @@ jobs:
           git clone https://github.com/FFmpeg/nv-codec-headers.git "$work/nv-codec-headers"
           git -C "$work/nv-codec-headers" checkout "$NV_CODEC_HEADERS_COMMIT"
           make -C "$work/nv-codec-headers" install PREFIX=/clang64
+
+          # 先确认 libass 依赖链在 CLANG64 下都能被 pkg-config 看到。
+          # 静态链接需要 .a，MSYS2 有些包的 .pc 只描述动态库，缺了要能一眼看出来。
+          echo "=== libass 依赖可用性 ==="
+          for dep in freetype2 fribidi fontconfig harfbuzz libass; do
+            if pkg-config --exists "$dep"; then
+              echo "  $dep: $(pkg-config --modversion "$dep")"
+            else
+              echo "  $dep: 缺失"
+            fi
+          done
+
           bash scripts/build.sh "$work/src" "$work/dist"
 
       - name: Package
