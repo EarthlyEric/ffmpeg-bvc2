@@ -95,7 +95,6 @@ fi
     $STATIC_FLAGS \
     --enable-network \
     --disable-ffplay \
-    --enable-pkg-config \
     $CC_FLAGS \
     $X264_FLAGS \
     $NVENC_FLAGS \
