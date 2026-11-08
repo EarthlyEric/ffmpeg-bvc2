@@ -174,14 +174,17 @@ jobs:
           set -euo pipefail
           work="$(cygpath -u "$RUNNER_TEMP")"
           cd "$work"
-          7z a "ffmpeg-bvc2-win64-${GITHUB_SHA}.zip" ./dist/* > /dev/null
-          sha256sum ffmpeg-bvc2-win64-*.zip | tee SHA256SUMS-win.txt
+          # 用 tar 而不是 7z：精简包集后没有 p7zip（原先由 toolchain 组间接带入），
+          # 而 tar 是 MSYS2 基础包自带。zip 格式对使用者更顺手，但 Windows 10+
+          # 资源管理器原生就能开 .tar.xz，且与 Linux 产物格式统一。
+          tar -cJf "ffmpeg-bvc2-win64-${GITHUB_SHA}.tar.xz" -C dist .
+          sha256sum ffmpeg-bvc2-win64-*.tar.xz | tee SHA256SUMS-win.txt
 
       - uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-win64
           path: |
-            ${{ runner.temp }}/ffmpeg-bvc2-win64-*.zip
+            ${{ runner.temp }}/ffmpeg-bvc2-win64-*.tar.xz
           retention-days: 30
 
   release:
