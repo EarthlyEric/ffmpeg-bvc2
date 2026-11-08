@@ -109,54 +109,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── MSYS2 安装：GitHub 基础设施抖动，做两层防护 ────────────────────
-      # `uses:` 步骤本身无法重试，所以连写两次：第一次失败后第二次再来。
-      # 另外开 cache 复用已下载的 MSYS2，避免每次都重新拉基础包
-      # （本仓库实测这里的失败全部是 503/504，且都发生在 "Downloading MSYS2..."）。
-      - name: Setup MSYS2 (attempt 1)
-        id: msys1
-        continue-on-error: true
-        uses: msys2/setup-msys2@v2
+      # ── MSYS2：直接用 runner 预装的 C:\msys64，不下载 ──────────────────
+      # GitHub 的 Windows runner 镜像自带 MSYS2（runner-images 的 Readme：
+      #   "MSYS2 / Pacman 6.1.0 / Location: C:\msys64 / pre-installed but not added to PATH"）。
+      # setup-msys2 的 `release: false` 就是「用这个预装安装」，不再去
+      # GitHub Releases 拉基础包 —— 之前连续 503/504 全卡在 "Downloading MSYS2..."，
+      # 这一步直接把失败源去掉，也不需要重试和清理半成品目录了。
+      - uses: msys2/setup-msys2@v2
         with:
-          # CLANG64，与 jellyfin-ffmpeg 官方 Windows 构建一致
-          # （.github/workflows/_meta_win_clang_portable.yaml 用的是
-          #  mingw-w64-clang-x86_64-toolchain）。用 gcc/UCRT64 会偏离上游验证过的组合。
           msystem: CLANG64
-          # update:false —— 完整 pacman -Syu 要轮询全部镜像，实测连续撞
-          # 504 / "Operation too slow"，而构建并不需要系统最新。
+          release: false
+          # update:false —— 完整 pacman -Syu 要轮询全部镜像，实测易超时；
+          # 构建并不需要系统最新。
           update: false
           # 也**不在这里装包**：装包失败要能重试，而 `uses:` 步骤无法重试。
           # 包里也不要 mingw-w64-clang-x86_64-toolchain 这个组 —— 它会拖进
           # 189 个包（含 ffmpeg / SDL2 / llama.cpp），既慢又极易超时。
           # 真正需要的只有 clang + lld + nasm + pkgconf + x264，下面单独装。
           install: ''
-          cache: true
-
-      - name: Clean up partial MSYS2 install
-        # attempt1 失败时可能已经建出半成品目录，setup-msys2 见到已存在就直接拒绝：
-        #   "Trying to install MSYS2 to ... but that already exists, cannot continue"
-        # 所以重试前必须先删干净。
-        if: steps.msys1.outcome == 'failure'
-        shell: pwsh
-        run: |
-          $dir = Join-Path $env:RUNNER_TEMP 'msys64'
-          if (Test-Path $dir) {
-            Write-Host "删除半成品目录: $dir"
-            Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
-          }
-          if (Test-Path $dir) {
-            Write-Host "::error::$dir 仍然存在，无法干净重试"
-            exit 1
-          }
-
-      - name: Setup MSYS2 (attempt 2)
-        if: steps.msys1.outcome == 'failure'
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: CLANG64
-          update: false
-          install: ''
-          cache: true
 
       - name: Install build toolchain (with retry)
         run: |
@@ -170,9 +140,12 @@ jobs:
           # --disable-download-timeout 是关键：镜像偶尔慢到
           # "Less than 1 bytes/sec transferred the last 10 seconds" 就整个事务失败。
           # 加上它 + 三次重试，把镜像抖动变成可恢复。
+          # -Sy 先同步软件包数据库：runner 预装的 MSYS2 数据库可能是旧的/缺的，
+          # 不同步会报 "target not found"。
           for attempt in 1 2 3; do
             echo "=== pacman 安装（第 $attempt 次） ==="
-            if pacman -S --needed --noconfirm --disable-download-timeout $pkgs; then
+            if pacman -Sy --noconfirm --disable-download-timeout && \
+               pacman -S --needed --noconfirm --disable-download-timeout $pkgs; then
               echo "安装成功"
               exit 0
             fi
