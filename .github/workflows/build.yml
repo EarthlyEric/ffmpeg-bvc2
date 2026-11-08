@@ -1,0 +1,158 @@
+name: build
+
+# 构建「jellyfin-ffmpeg + bytevc2 解码器」。
+#
+# 为什么用 patch 而不是 fork 整个 FFmpeg：
+#   bvc2 的改动只有 ~107 行 / 15 个文件，主体是复用上游已有的 vvc 解码器。
+#   fork 的话要背着 FFmpeg 的完整历史，上游升级靠 merge（冲突容易静默错位）；
+#   patch 的话升级只需改 UPSTREAM_COMMIT，patch 对不上会**立刻失败**——
+#   这正是我们要的：宁可构建红，也不要静默产出没有 bvc2 的二进制。
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      upstream_commit:
+        description: '覆盖 UPSTREAM_COMMIT（留空用文件里的）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM_REPO: https://github.com/jellyfin/jellyfin-ffmpeg.git
+  UPSTREAM_BRANCH: jellyfin
+
+jobs:
+  # 先做纯文本校验：几十秒内暴露 patch 与上游错位，不必等 1-2 小时的编译。
+  verify:
+    name: Verify patch applies
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.pin.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve pinned commit
+        id: pin
+        run: |
+          set -euo pipefail
+          commit="${{ inputs.upstream_commit }}"
+          if [ -z "$commit" ]; then
+            commit="$(tr -d '[:space:]' < UPSTREAM_COMMIT)"
+          fi
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "上游提交: $commit"
+
+      - name: Prepare sources
+        env:
+          UPSTREAM_COMMIT_OVERRIDE: ${{ steps.pin.outputs.commit }}
+        run: bash scripts/prepare.sh "$RUNNER_TEMP/src"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: patched-src
+          path: ${{ runner.temp }}/src
+          retention-days: 1
+
+  build-linux:
+    name: Linux x86_64
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: patched-src
+          path: ${{ runner.temp }}/src
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential yasm nasm pkg-config libx264-dev
+
+      - name: Build
+        run: bash scripts/build.sh "$RUNNER_TEMP/src" "$RUNNER_TEMP/dist"
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          tar -cJf "ffmpeg-bvc2-linux64-$GITHUB_SHA.tar.xz" -C dist .
+          sha256sum ffmpeg-bvc2-linux64-*.tar.xz | tee SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-linux64
+          path: |
+            ${{ runner.temp }}/ffmpeg-bvc2-linux64-*.tar.xz
+          retention-days: 30
+
+  # Windows 是主要使用场景：ShortTV 跑在 Windows 上，需要 ffmpeg.exe。
+  build-windows:
+    name: Windows x86_64
+    needs: verify
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git make diffutils mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-nasm mingw-w64-x86_64-yasm
+            mingw-w64-x86_64-pkgconf mingw-w64-x86_64-x264
+
+      - name: Prepare sources
+        env:
+          UPSTREAM_REPO: https://github.com/jellyfin/jellyfin-ffmpeg.git
+          UPSTREAM_BRANCH: jellyfin
+        run: bash scripts/prepare.sh "$RUNNER_TEMP/src"
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          # Windows 下 nproc 返回的是逻辑核数，make 用得上。
+          bash scripts/build.sh "$RUNNER_TEMP/src" "$RUNNER_TEMP/dist"
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          7z a "ffmpeg-bvc2-win64-${GITHUB_SHA}.zip" ./dist/* > /dev/null
+          sha256sum ffmpeg-bvc2-win64-*.zip | tee SHA256SUMS-win.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-win64
+          path: |
+            ${{ runner.temp }}/ffmpeg-bvc2-win64-*.zip
+          retention-days: 30
+
+  release:
+    name: Release
+    needs: [build-linux, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          body: |
+            基于 jellyfin-ffmpeg `${{ needs.verify.outputs.commit }}` 构建，附加 bytevc2 解码器。
+
+            - 产物含 `bvc2` 解码器（`ffmpeg -decoders | grep bvc2` 可验）
+            - patch 见仓库 `patches/`，上游升级只需改 `UPSTREAM_COMMIT`

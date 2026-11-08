@@ -1,0 +1,7 @@
+# 忽略构建产物与本地临时目录
+/dist/
+/upstream/
+/*.tar.xz
+/*.zip
+/build/
+.DS_Store

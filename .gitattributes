@@ -1,0 +1,5 @@
+# 统一 LF；patch 文件尤其不能带 CRLF，否则 git apply 会拒绝
+* text=auto eol=lf
+
+*.patch text eol=lf
+*.sh text eol=lf
