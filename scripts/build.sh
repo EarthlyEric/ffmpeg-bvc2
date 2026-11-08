@@ -3,6 +3,9 @@
 #
 # 用法: build.sh <源目录> <输出目录>
 #
+# 环境变量:
+#   NV_CODEC_HEADERS_VERSION  已安装的 nv-codec-headers 版本（仅用于诊断输出）
+#
 # 为什么要有这个脚本而不是把 configure 参数写进 workflow：
 # 本地复现 CI 失败时，直接跑同一条命令即可，不必猜 workflow 拼出来的参数。
 set -eu
@@ -98,7 +101,17 @@ done
 if [ -n "$FFNVCODEC_HEADER" ]; then
     NVENC_FLAGS="--enable-nvenc --enable-ffnvcodec"
     NVENC_ENCODERS=",h264_nvenc,hevc_nvenc"
-    echo "NVENC: 找到 $FFNVCODEC_HEADER，启用硬件编码器"
+    # 报出编进二进制的 NVENC API 版本。这是一次真实事故的产物：
+    # 用 nv-codec-headers master（API 13.1）构建出的 ffmpeg，在驱动 572.83
+    # （只支持到 13.0）的机器上会直接失败：
+    #   Driver does not support the required nvenc API version. Required: 13.1 Found: 13.0
+    # 而编码器探测又会把这种失败当成「没有硬件编码器」静默回退软编，
+    # 表面上只是变慢，很容易被误判成别的原因。
+    api_major=$(sed -n 's/^#define NVENCAPI_MAJOR_VERSION \([0-9]*\)/\1/p' "$FFNVCODEC_HEADER" | head -1)
+    api_minor=$(sed -n 's/^#define NVENCAPI_MINOR_VERSION \([0-9]*\)/\1/p' "$FFNVCODEC_HEADER" | head -1)
+    echo "NVENC: 找到 $FFNVCODEC_HEADER，启用硬件编码器（API ${api_major:-?}.${api_minor:-?}）"
+    echo "NVENC: 该 API 版本要求驱动不低于对应 Video Codec SDK 的最低版本；" \
+         "13.0 对应 570 系列，13.1 要求 610+。老驱动会静默回退软编。"
 else
     echo "NVENC: 未找到 ffnvcodec 头文件，仅使用软件编码"
 fi

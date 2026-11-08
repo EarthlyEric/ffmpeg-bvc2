@@ -25,6 +25,13 @@ permissions:
 env:
   UPSTREAM_REPO: https://github.com/jellyfin/jellyfin-ffmpeg.git
   UPSTREAM_BRANCH: jellyfin
+  # nv-codec-headers 钉在 NVENC API 13.0（Video Codec SDK 13.0）。
+  # 不用 master：master 是 13.1，编出的 ffmpeg 在驱动 < 610 的机器上会
+  # 报 "Driver does not support the required nvenc API version. Required: 13.1 Found: 13.0"，
+  # 并被编码器探测吞掉、静默退化成软编（本机 Quadro P620 + 驱动 572.83 实测）。
+  # 13.0 = 570 系列驱动即可，覆盖面更广。
+  #   验证方式: sed -n 's/^#define NVENCAPI_MINOR_VERSION \(.*\)/\1/p' include/ffnvcodec/nvEncodeAPI.h
+  NV_CODEC_HEADERS_COMMIT: f2fb9b36d5e08d6211f7cf6377971c0570939e65
 
 jobs:
   # 先做纯文本校验：几十秒内暴露 patch 与上游错位，不必等 1-2 小时的编译。
@@ -76,9 +83,14 @@ jobs:
         # 只有头文件（没有运行时依赖），让 configure 能开 nvenc。
         # 硬件编码是关键：libx264 软编 1080p 约 0.5x 实时，NVENC 约 11x。
         # 装到 /usr：configure 的 --enable-ffnvcodec 走 pkg-config，装到临时前缀它找不到。
+        #
+        # ⚠️ 必须钉版本，不能用 master。master 是 NVENC API 13.1，编出的 ffmpeg 在
+        # 驱动 < 610 的机器上会失败（实测 572.83 报 "Required: 13.1 Found: 13.0"），
+        # 而且失败会被编码器探测吞掉、静默退化成软编。13.0 对应 570 系列驱动。
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/FFmpeg/nv-codec-headers.git "$RUNNER_TEMP/nv-codec-headers"
+          git clone https://github.com/FFmpeg/nv-codec-headers.git "$RUNNER_TEMP/nv-codec-headers"
+          git -C "$RUNNER_TEMP/nv-codec-headers" checkout "$NV_CODEC_HEADERS_COMMIT"
           sudo make -C "$RUNNER_TEMP/nv-codec-headers" install PREFIX=/usr
 
       - name: Build
@@ -172,7 +184,9 @@ jobs:
           set -euo pipefail
           work="$(cygpath -u "$RUNNER_TEMP")"
           # ffnvcodec: 头文件装到 CLANG64 前缀，build.sh 会去那找。
-          git clone --depth 1 https://github.com/FFmpeg/nv-codec-headers.git "$work/nv-codec-headers"
+          # 同样钉 commit 不用 master（理由见 job 级 env 里的说明）。
+          git clone https://github.com/FFmpeg/nv-codec-headers.git "$work/nv-codec-headers"
+          git -C "$work/nv-codec-headers" checkout "$NV_CODEC_HEADERS_COMMIT"
           make -C "$work/nv-codec-headers" install PREFIX=/clang64
           bash scripts/build.sh "$work/src" "$work/dist"
 
