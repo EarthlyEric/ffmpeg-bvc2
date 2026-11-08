@@ -15,12 +15,26 @@ cd "$SRC"
 # 硬件编码器是这次自建的主要动机之一：librempeg 的预编译件只有 libx264 软编，
 # 1080p 转码约 0.5x 实时（一集 106 秒要等 55 秒）。开 NVENC 后同一台机器约 11x。
 NVENC_FLAGS=""
-if [ -d "${FFNVCODEC_PREFIX:-/usr}" ] && [ -f "${FFNVCODEC_PREFIX:-/usr}/include/ffnvcodec/nvEncodeAPI.h" ]; then
-    NVENC_FLAGS="--enable-nvenc --enable-ffnvcodec --enable-cuda-llvm --enable-cuvid --enable-nvdec"
-    # cuda-llvm/cuvid 需要 CUDA 工具链；没有就只开 nvenc，避免为解码器引入整套 CUDA。
-    if ! command -v clang >/dev/null 2>&1; then
-        NVENC_FLAGS="--enable-nvenc --enable-ffnvcodec"
-    fi
+NVENC_ENCODERS=""
+# ffnvcodec 头文件位置：Linux 装在 /usr，MSYS2 在 mingw 前缀下。
+FFNVCODEC_HEADER=""
+for candidate in \
+    "${FFNVCODEC_PREFIX:-}/include/ffnvcodec/nvEncodeAPI.h" \
+    "/usr/include/ffnvcodec/nvEncodeAPI.h" \
+    "${MINGW_PREFIX:-/mingw64}/include/ffnvcodec/nvEncodeAPI.h" \
+    "${MINGW_PREFIX:-/mingw64}/include/ffnvcodec/nvEncodeAPI.h"
+do
+    [ -n "$candidate" ] && [ -f "$candidate" ] && { FFNVCODEC_HEADER="$candidate"; break; }
+done
+
+if [ -n "$FFNVCODEC_HEADER" ]; then
+    NVENC_FLAGS="--enable-nvenc --enable-ffnvcodec"
+    NVENC_ENCODERS=",h264_nvenc,hevc_nvenc"
+    echo "NVENC: 找到 $FFNVCODEC_HEADER，启用硬件编码器"
+else
+    # 没有 ffnvcodec 时**必须**连 --enable-encoder=h264_nvenc 一起去掉，
+    # 否则 configure 会因依赖缺失直接失败（而不是跳过）。
+    echo "NVENC: 未找到 ffnvcodec 头文件，仅使用 libx264 软编"
 fi
 
 ./configure \
@@ -37,8 +51,7 @@ fi
     --enable-libx264 \
     $NVENC_FLAGS \
     --enable-decoder=bvc2,vvc,h264,hevc,aac,flac,mp3,ac3,eac3,opus,vorbis,pcm_s16le \
-    --enable-encoder=libx264,aac,h264_nvenc,hevc_nvenc \
-    --enable-hwaccel=h264_nvdec,hevc_nvdec \
+    --enable-encoder=libx264,aac${NVENC_ENCODERS} \
     --enable-demuxer=mov,mpegts,hls,matroska,mp3,wav,flac,ogg \
     --enable-muxer=mp4,mpegts,hls,matroska,null,mp3,wav \
     --enable-protocol=file,http,https,tcp,tls,crypto,pipe \

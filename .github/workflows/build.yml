@@ -75,6 +75,15 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential yasm nasm pkg-config libx264-dev
 
+      - name: Install ffnvcodec headers
+        # 只有头文件（没有运行时依赖），让 configure 能开 nvenc。
+        # 硬件编码是关键：libx264 软编 1080p 约 0.5x 实时，NVENC 约 11x。
+        # 装到 /usr：configure 的 --enable-ffnvcodec 走 pkg-config，装到临时前缀它找不到。
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/FFmpeg/nv-codec-headers.git "$RUNNER_TEMP/nv-codec-headers"
+          sudo make -C "$RUNNER_TEMP/nv-codec-headers" install PREFIX=/usr
+
       - name: Build
         run: bash scripts/build.sh "$RUNNER_TEMP/src" "$RUNNER_TEMP/dist"
 
@@ -121,7 +130,9 @@ jobs:
       - name: Build
         run: |
           set -euo pipefail
-          # Windows 下 nproc 返回的是逻辑核数，make 用得上。
+          # ffnvcodec: MSYS2 的 nv-codec-headers 装到 mingw 前缀，build.sh 会去那找。
+          git clone --depth 1 https://github.com/FFmpeg/nv-codec-headers.git "$RUNNER_TEMP/nv-codec-headers"
+          make -C "$RUNNER_TEMP/nv-codec-headers" install PREFIX=/mingw64
           bash scripts/build.sh "$RUNNER_TEMP/src" "$RUNNER_TEMP/dist"
 
       - name: Package
