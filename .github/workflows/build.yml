@@ -125,20 +125,27 @@ jobs:
           UPSTREAM_REPO: https://github.com/jellyfin/jellyfin-ffmpeg.git
           UPSTREAM_BRANCH: jellyfin
           UPSTREAM_COMMIT_OVERRIDE: ${{ needs.verify.outputs.commit }}
-        run: bash scripts/prepare.sh "$RUNNER_TEMP/src"
+        run: |
+          # $RUNNER_TEMP 在 MSYS2 里是 `D:\a\_temp` 这种 Windows 路径，
+          # 直接传给 bash 的 cd 会失败（实测 "No such file or directory"）。
+          # 用 cygpath 转成 POSIX 形式。
+          work="$(cygpath -u "$RUNNER_TEMP")"
+          bash scripts/prepare.sh "$work/src"
 
       - name: Build
         run: |
           set -euo pipefail
+          work="$(cygpath -u "$RUNNER_TEMP")"
           # ffnvcodec: 头文件装到 UCRT64 前缀，build.sh 会去那找。
-          git clone --depth 1 https://github.com/FFmpeg/nv-codec-headers.git "$RUNNER_TEMP/nv-codec-headers"
-          make -C "$RUNNER_TEMP/nv-codec-headers" install PREFIX=/ucrt64
-          bash scripts/build.sh "$RUNNER_TEMP/src" "$RUNNER_TEMP/dist"
+          git clone --depth 1 https://github.com/FFmpeg/nv-codec-headers.git "$work/nv-codec-headers"
+          make -C "$work/nv-codec-headers" install PREFIX=/ucrt64
+          bash scripts/build.sh "$work/src" "$work/dist"
 
       - name: Package
         run: |
           set -euo pipefail
-          cd "$RUNNER_TEMP"
+          work="$(cygpath -u "$RUNNER_TEMP")"
+          cd "$work"
           7z a "ffmpeg-bvc2-win64-${GITHUB_SHA}.zip" ./dist/* > /dev/null
           sha256sum ffmpeg-bvc2-win64-*.zip | tee SHA256SUMS-win.txt
 
