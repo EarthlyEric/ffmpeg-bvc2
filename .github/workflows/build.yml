@@ -132,6 +132,23 @@ jobs:
           install: ''
           cache: true
 
+      - name: Clean up partial MSYS2 install
+        # attempt1 失败时可能已经建出半成品目录，setup-msys2 见到已存在就直接拒绝：
+        #   "Trying to install MSYS2 to ... but that already exists, cannot continue"
+        # 所以重试前必须先删干净。
+        if: steps.msys1.outcome == 'failure'
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'msys64'
+          if (Test-Path $dir) {
+            Write-Host "删除半成品目录: $dir"
+            Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+          }
+          if (Test-Path $dir) {
+            Write-Host "::error::$dir 仍然存在，无法干净重试"
+            exit 1
+          }
+
       - name: Setup MSYS2 (attempt 2)
         if: steps.msys1.outcome == 'failure'
         uses: msys2/setup-msys2@v2
