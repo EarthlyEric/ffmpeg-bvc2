@@ -115,16 +115,38 @@ jobs:
           # （.github/workflows/_meta_win_clang_portable.yaml 用的是
           #  mingw-w64-clang-x86_64-toolchain）。用 gcc/UCRT64 会偏离上游验证过的组合。
           msystem: CLANG64
-          # ⚠️ update:false 是刻意的。update:true 会跑完整 pacman -Syu，
-          # 要轮询大量镜像，本仓库实测连续三次撞 504（Unexpected HTTP response: 504）。
-          # 构建用不到「系统最新」，只要下面这几个包能装上即可。
+          # update:false —— 完整 pacman -Syu 要轮询全部镜像，实测连续四次撞
+          # 504 / "Operation too slow"，而构建并不需要系统最新。
           update: false
-          install: >-
-            git make diffutils
-            mingw-w64-clang-x86_64-toolchain
-            mingw-w64-clang-x86_64-nasm
-            mingw-w64-clang-x86_64-pkgconf
-            mingw-w64-clang-x86_64-x264
+          # 也**不在这里装包**：装包失败要能重试，而 `uses:` 步骤无法重试。
+          # 包里也不要 mingw-w64-clang-x86_64-toolchain 这个组 —— 它会拖进
+          # 189 个包（含 ffmpeg / SDL2 / llama.cpp），既慢又极易超时。
+          # 真正需要的只有 clang + lld + nasm + pkgconf + x264，下面单独装。
+          install: ''
+
+      - name: Install build toolchain (with retry)
+        run: |
+          set -uo pipefail
+          pkgs="make diffutils git \
+            mingw-w64-clang-x86_64-clang \
+            mingw-w64-clang-x86_64-lld \
+            mingw-w64-clang-x86_64-nasm \
+            mingw-w64-clang-x86_64-pkgconf \
+            mingw-w64-clang-x86_64-x264"
+          # --disable-download-timeout 是关键：镜像偶尔慢到
+          # "Less than 1 bytes/sec transferred the last 10 seconds" 就整个事务失败。
+          # 加上它 + 三次重试，把镜像抖动变成可恢复。
+          for attempt in 1 2 3; do
+            echo "=== pacman 安装（第 $attempt 次） ==="
+            if pacman -S --needed --noconfirm --disable-download-timeout $pkgs; then
+              echo "安装成功"
+              exit 0
+            fi
+            echo "第 $attempt 次失败，10 秒后重试"
+            sleep 10
+          done
+          echo "::error::pacman 连续三次安装失败（MSYS2 镜像问题）"
+          exit 1
 
       - name: Prepare sources
         env:
