@@ -64,6 +64,19 @@ case "$(uname -s)" in
         ;;
     Linux)
         echo "工具链: gcc ($(cc --version | head -1))"
+        # 与 Windows 同理：产物是单文件可执行，必须全静态。
+        # 动态链接的产物实测在 ubuntu-22.04 上报
+        #   libx264.so.164: cannot open shared object file
+        # （构建 runner 是 24.04 有 .164，目标机器没有），发布可移植产物
+        # 只能全静态。glibc 静态链接会让 getaddrinfo 在链接期告警（NSS
+        # 依赖共享库），只影响静态二进制的 DNS 解析；本地文件转码不受影响。
+        STATIC_FLAGS="--enable-static --disable-shared --extra-ldflags=-static"
+        # ⚠️ 必须带 --static：让 pkg-config 输出 Libs.private 的完整闭包，
+        # 且配合 -static 让链接器选 .a 而不是 .so。
+        PKGCONFIG_FLAGS="--pkg-config-flags=--static"
+        # 探测要与真实链接同条件：全静态产物下，缺 .a 的依赖必须在探测期就失败，
+        # 否则探测（动态）通过、configure（静态）却报错，整个构建直接炸。
+        PROBE_STATIC="-static"
         ;;
 esac
 
@@ -148,7 +161,7 @@ can_static_link() {
 #include <$_header>
 int main(void) { (void)&$_symbol; return 0; }
 PROBE
-    if ${CC:-cc} $_cflags "$_tmp/probe.c" $_libs -o "$_tmp/probe" >/dev/null 2>&1; then
+    if ${CC:-cc} $_cflags "$_tmp/probe.c" $_libs ${PROBE_STATIC:-} -o "$_tmp/probe" >/dev/null 2>&1; then
         rm -rf "$_tmp"
         return 0
     fi
